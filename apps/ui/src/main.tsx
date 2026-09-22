@@ -1,0 +1,16 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { loader } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
+import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import { App } from './App';
+import './style.css';
+import './themes.css';
+import './workspace.css';
+(self as any).MonacoEnvironment = { getWorker: (_: string, label: string) => label === 'json' ? new JsonWorker() : ['css', 'scss', 'less'].includes(label) ? new CssWorker() : ['html', 'handlebars', 'razor'].includes(label) ? new HtmlWorker() : ['typescript', 'javascript'].includes(label) ? new TsWorker() : new EditorWorker() };
+loader.config({ monaco });
+createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
