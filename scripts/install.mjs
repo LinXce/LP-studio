@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { showBanner } from './banner.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -40,6 +41,16 @@ const candidates = [process.env.npm_execpath,
 const npm = candidates.find(file => /npm-cli\.js$/i.test(file) && existsSync(file));
 if (!npm) { console.error('[!] npm-cli.js not found beside Node.js. Reinstall Node.js including npm, or run npm.cmd run setup:mirror.'); process.exit(1); }
 writeFileSync(npmrc, updated, 'utf8');
+function missingElectronDependencies() {
+  const entry = path.join(root, 'node_modules/electron/install.js');
+  if (!existsSync(entry)) return ['electron'];
+  const fromElectron = createRequire(entry);
+  const modulesRoot = path.join(root, 'node_modules') + path.sep;
+  return ['@electron/get', '@electron-internal/extract-zip'].filter(name => {
+    try { return !path.resolve(fromElectron.resolve(name)).startsWith(modulesRoot); }
+    catch { return true; }
+  });
+}
 function run(file, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [file, ...args], { cwd: root, env, stdio: 'inherit', windowsHide: true, shell: false });
@@ -48,8 +59,21 @@ function run(file, args) {
   });
 }
 try {
-  // Reuse locked versions and existing modules, including a partially downloaded runtime.
-  await run(npm, ['install', '--include=dev', '--ignore-scripts=false', '--no-audit', '--no-fund', '--package-lock=true', `--registry=${selected.registry}`]);
+  // Reuse a healthy installation. npm can report "up to date" for a copied,
+  // incomplete node_modules directory; verify Electron's own dependencies first.
+  const installArgs = ['--include=dev', '--include=optional', '--ignore-scripts=false', '--no-audit', '--no-fund', `--registry=${selected.registry}`];
+  let installError;
+  try { await run(npm, ['install', ...installArgs, '--package-lock=true']); }
+  catch (failure) { installError = failure; }
+  const missing = missingElectronDependencies();
+  if (installError && !missing.length) throw installError;
+  if (missing.length) {
+    if (!existsSync(path.join(root, 'package-lock.json'))) throw Error(`Missing ${missing.join(', ')} and package-lock.json; cannot repair dependencies automatically.`);
+    console.warn(`[!] Incomplete Electron dependencies (${missing.join(', ')}). Reinstalling from package-lock.json; npm ci will replace node_modules.`);
+    await run(npm, ['ci', ...installArgs]);
+    const after = missingElectronDependencies();
+    if (after.length) throw Error(`Electron dependencies are still missing: ${after.join(', ')}. Check npm install logs and try the other source.`);
+  }
   // npm may regard the Electron package as installed even if its earlier binary download failed.
   await run(path.join(root, 'node_modules/electron/install.js'), []);
   const electronDir = path.join(root, 'node_modules/electron');

@@ -94,7 +94,7 @@ npm.cmd run pack:win      # Windows x64 便携目录
 npm.cmd run setup:mirror
 ```
 
-此入口同时设置 npm 包源 `https://registry.npmmirror.com/` 和 Electron 下载镜像 `https://npmmirror.com/mirrors/electron/`，缓存放在项目 `.cache` 中；Electron 之前下载不完整时会再次运行其安装程序。只修改项目 `.npmrc`，不修改全局 npm 配置。不删除 node_modules 或锁文件（npm 会在需要时同步锁文件），不自动启动应用。
+此入口同时设置 npm 包源 `https://registry.npmmirror.com/` 和 Electron 下载镜像 `https://npmmirror.com/mirrors/electron/`，缓存放在项目 `.cache` 中；Electron 之前下载不完整时会再次运行其安装程序。只修改项目 `.npmrc`，不修改全局 npm 配置。通常保留已有 node_modules；若检测到复制迁移造成的 Electron 依赖缺失（例如 @electron/get），会执行 npm ci 按锁文件重装，此时 npm 会替换整个 node_modules。不自动启动应用。
 
 若镜像不可用，双击 `安装依赖-官方源.cmd` 或执行：
 
@@ -102,7 +102,7 @@ npm.cmd run setup:mirror
 npm.cmd run setup:official
 ```
 
-选中的 npm 源会保存在项目 `.npmrc`；Electron 镜像只作用于安装脚本的子进程。因此后续修复依赖请继续使用这两个入口。普通 `npm install` 不会自动获得脚本中的 Electron 镜像设置。脚本使用现有 package-lock.json；需要严格按锁文件全新安装的 CI 环境可显式设置 `ELECTRON_MIRROR` 后使用 `npm ci`。
+选中的 npm 源会保存在项目 `.npmrc`；Electron 镜像只作用于安装脚本的子进程。因此后续修复依赖请继续使用这两个入口。普通 `npm install` 不会自动获得脚本中的 Electron 镜像设置。脚本优先复用现有依赖；检测到缺失时按现有 package-lock.json 重新安装。迁移开发项目时可以复制源码与锁文件，再在新电脑运行安装入口，不必复制旧电脑的 node_modules。
 
 安装完成后双击 `启动开发版.cmd`。启动不会自动安装依赖；缺少依赖时会显示明确提示。安装日志位于 `.cache/npm/_logs`。
 
