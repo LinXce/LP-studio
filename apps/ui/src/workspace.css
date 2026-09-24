@@ -125,6 +125,7 @@
 .session-tab { display: flex; flex-shrink: 0; align-items: center; border-right: 1px solid var(--border); border-top: 2px solid transparent; color: var(--muted); }
 .session-tab.active { border-top-color: var(--accent); background: var(--surface); color: var(--accent); }
 .session-tab .tab-open { color: inherit; padding: 10px; min-width: 0; }
+.session-tab .tab-open:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); border-radius: 4px; }
 .session-tab .tab-open span { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-tab .tab-close { color: inherit; padding: 4px; margin-right: 6px; border-radius: 4px; }
 .session-tab .tab-close:hover { background: var(--selected); color: var(--text); }

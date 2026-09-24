@@ -17,20 +17,21 @@ async function temporary(t: any) {
 function fakePty() {
   const written: string[] = []; const sizes: Array<[number, number]> = []; let killed = false;
   let data: ((chunk: string) => void) | undefined; let exit: ((event: { exitCode: number }) => void) | undefined;
+  const exits: Array<(event: { exitCode: number }) => void> = [];
   const spawns: { file: string; args: string[]; cwd: string }[] = [];
   const module: PtyModule = {
     spawn(file, args, options) {
       spawns.push({ file, args, cwd: options.cwd });
       return {
         onData: callback => { data = callback; },
-        onExit: callback => { exit = callback; },
+        onExit: callback => { exit = callback; exits.push(callback); },
         write: chunk => written.push(chunk),
         resize: (cols, rows) => sizes.push([cols, rows]),
         kill: () => { killed = true; exit?.({ exitCode: 0 }); },
       };
     },
   };
-  return { module, spawns, written, sizes, isKilled: () => killed, push: (chunk: string) => data?.(chunk), close: (code: number) => exit?.({ exitCode: code }) };
+  return { module, spawns, written, sizes, isKilled: () => killed, push: (chunk: string) => data?.(chunk), close: (code: number) => exit?.({ exitCode: code }), closeAt: (index: number, code: number) => exits[index]?.({ exitCode: code }) };
 }
 async function service(t: any, injected: PtyModule | null, kind: ProviderConfig['kind'] = 'command-cli') {
   const dir = await temporary(t);
@@ -94,6 +95,32 @@ test('terminal spawns the CLI in the project and forwards bytes both ways', asyn
   pty.close(0);
   assert.deepEqual(events.at(-1), { sessionId: 's', type: 'exit', data: '', exitCode: 0 });
   assert.equal(terminal.has('s'), false);
+});
+test('concurrent starts share one PTY and stopping during lookup cancels the stale start', async t => {
+  const pty = fakePty();
+  const { terminal, events } = await service(t, pty.module);
+  const [first, second] = await Promise.all([terminal.start('s'), terminal.start('s')]);
+  assert.equal(first.ok && second.ok, true);
+  assert.equal(pty.spawns.length, 1);
+  terminal.stop('s');
+  await terminal.start('s');
+  assert.equal(pty.spawns.length, 2);
+  // A delayed exit from the old process must not remove the new PTY.
+  pty.closeAt(0, 0);
+  assert.equal(terminal.has('s'), true);
+  assert.equal(events.filter(event => event.type === 'exit').length, 0);
+});
+test('stop while resolving CLI cancels first start without killing a later start', async t => {
+  const pty = fakePty();
+  const { terminal } = await service(t, pty.module);
+  const stale = terminal.start('s');
+  terminal.stop('s');
+  const current = terminal.start('s');
+  assert.equal((await stale).ok, false);
+  assert.equal((await current).ok, true);
+  assert.equal(pty.spawns.length, 1);
+  terminal.write('s', 'FIRSTINPUT');
+  assert.deepEqual(pty.written, ['FIRSTINPUT']);
 });
 test('terminal stop kills the process and unknown sessions are ignored', async t => {
   const pty = fakePty();

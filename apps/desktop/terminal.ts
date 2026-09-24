@@ -23,10 +23,21 @@ function loadPty(injected?: PtyModule | null): PtyModule | null {
 const MAX_SESSION_BYTES = 64 * 1024 * 1024;
 export class TerminalService {
   private sessions = new Map<string, PtyProcess>();
+  private starting = new Map<string, Promise<TerminalStart>>();
+  private generations = new Map<string, number>();
   constructor(private store: Store, private emit: (event: TerminalEvent) => void, private injected?: PtyModule | null) {}
   has(sessionId: string) { return this.sessions.has(sessionId); }
-  async start(sessionId: string): Promise<TerminalStart> {
-    if (this.sessions.has(sessionId)) return { ok: true, message: '终端已在运行' };
+  start(sessionId: string): Promise<TerminalStart> {
+    if (this.sessions.has(sessionId)) return Promise.resolve({ ok: true, message: '\u7ec8\u7aef\u5df2\u5728\u8fd0\u884c' });
+    const pending = this.starting.get(sessionId);
+    if (pending) return pending;
+    const generation = this.generations.get(sessionId) ?? 0;
+    const task = this.launch(sessionId, generation);
+    this.starting.set(sessionId, task);
+    void task.finally(() => { if (this.starting.get(sessionId) === task) this.starting.delete(sessionId); }).catch(() => {});
+    return task;
+  }
+  private async launch(sessionId: string, generation: number): Promise<TerminalStart> {
     const session = this.store.session(sessionId);
     const project = this.store.project(session.projectId);
     const config = sessionConfig(this.store, session.id);
@@ -38,6 +49,8 @@ export class TerminalService {
     const launch = await resolveExecutable(preset.command);
     // A .cmd/npm wrapper resolves to the Electron binary, which cannot host a PTY: use the real Node instead.
     const executable = launch.executable === process.execPath ? await resolveNodeRuntime() : launch.executable;
+    // Unmount/stop can arrive while executable lookup is still pending.
+    if (this.generations.get(sessionId) !== undefined && this.generations.get(sessionId) !== generation) return { ok: false, message: '\u7ec8\u7aef\u542f\u52a8\u5df2\u53d6\u6d88' };
     const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
     delete env.NODE_OPTIONS;
     const child = pty.spawn(executable, [...launch.args, ...preset.args], { cwd: project.root, env, cols: 120, rows: 30, name: 'xterm-256color' });
@@ -45,7 +58,7 @@ export class TerminalService {
     this.sessions.set(sessionId, child);
     let bytes = 0; let capped = false;
     child.onData(data => {
-      if (capped) return;
+      if (capped || this.sessions.get(sessionId) !== child) return;
       bytes += Buffer.byteLength(data);
       if (bytes > MAX_SESSION_BYTES) {
         capped = true;
@@ -55,16 +68,21 @@ export class TerminalService {
       }
       this.emit({ sessionId, type: 'data', data });
     });
-    child.onExit(({ exitCode }) => { this.sessions.delete(sessionId); this.emit({ sessionId, type: 'exit', data: '', exitCode }); });
+    child.onExit(({ exitCode }) => {
+      if (this.sessions.get(sessionId) !== child) return;
+      this.sessions.delete(sessionId); this.emit({ sessionId, type: 'exit', data: '', exitCode });
+    });
     return { ok: true, message: '' };
   }
   write(sessionId: string, data: string) { this.sessions.get(sessionId)?.write(data); }
   resize(sessionId: string, cols: number, rows: number) { this.sessions.get(sessionId)?.resize(cols, rows); }
   stop(sessionId: string) {
+    this.generations.set(sessionId, (this.generations.get(sessionId) ?? 0) + 1);
+    this.starting.delete(sessionId);
     const child = this.sessions.get(sessionId);
     if (!child) return;
     this.sessions.delete(sessionId);
     try { child.kill(); } catch { /* already gone */ }
   }
-  stopAll() { for (const id of [...this.sessions.keys()]) this.stop(id); }
+  stopAll() { for (const id of new Set([...this.sessions.keys(), ...this.starting.keys()])) this.stop(id); }
 }
