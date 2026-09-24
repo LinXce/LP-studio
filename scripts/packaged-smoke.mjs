@@ -27,7 +27,7 @@ try {
     await page.reload(); await nav('设置').click();
     assert.equal(await page.getByRole('button', { name: '工业浅色主题', exact: true }).getAttribute('aria-pressed'), 'true');
     await page.screenshot({ animations: 'disabled', path: path.resolve('.cache/packaged-theme-settings.png') });
-    await nav('工作台').click();
+    await nav('终端').click();
     await page.screenshot({ animations: 'disabled', path: path.resolve('.cache/packaged-theme-industrial.png') });
   } finally {
     await page.evaluate(theme => { if (theme === null) localStorage.removeItem('lp-theme'); else localStorage.setItem('lp-theme', theme); }, originalTheme);

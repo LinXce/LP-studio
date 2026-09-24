@@ -40,5 +40,5 @@ export async function checkPanelToggles(page) {
   await assertPanelLayout(page, { right: false });
   await page.keyboard.press('Control+j');
   await assertPanelLayout(page);
-  await rail.getByRole('button', { name: '工作台', exact: true }).click();
+  await rail.getByRole('button', { name: '终端', exact: true }).click();
 }

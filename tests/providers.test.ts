@@ -49,3 +49,9 @@ test('abort terminates a running process', async () => {
   const promise = runProcess({ executable: process.execPath, args: [] }, ['-e', 'process.stdout.write("ready"); setInterval(()=>{},1000)'], { cwd: process.cwd(), signal: controller.signal, stdout: () => controller.abort(Error('test cancel')), stderr: () => {} });
   await assert.rejects(promise, /test cancel/);
 });
+test('a non-zero exit carries the last stderr lines for the notice', async () => {
+  await assert.rejects(
+    runProcess({ executable: process.execPath, args: [] }, ['-e', 'console.error("missing credentials"); process.exitCode = 9;'], { cwd: process.cwd(), signal: AbortSignal.timeout(5000), stdout: () => {}, stderr: () => {} }),
+    /进程退出码 9：missing credentials/,
+  );
+});

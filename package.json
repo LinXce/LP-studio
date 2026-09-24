@@ -20,6 +20,8 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "lucide-react": "^0.468.0",
     "monaco-editor": "^0.52.2",
     "react": "^19.0.0",
@@ -43,17 +45,25 @@
     "appId": "local.lpstudio.workbench",
     "productName": "LP Studio",
     "asar": true,
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/node-pty/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
     ],
     "win": {
       "target": "dir",
       "signAndEditExecutable": false
     },
     "electronDist": "node_modules/electron/dist"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

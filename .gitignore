@@ -5,3 +5,8 @@ release/
 .lp-data/
 *.log
 .env*
+.commandcode/
+.codex/
+.claude/
+.idea/
+.vscode/

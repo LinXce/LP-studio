@@ -55,6 +55,11 @@ try {
   const electronDir = path.join(root, 'node_modules/electron');
   const binary = readFileSync(path.join(electronDir, 'path.txt'), 'utf8').trim();
   if (!existsSync(path.join(electronDir, 'dist', binary))) throw Error('Electron runtime is still missing');
+  // node-pty stays optional: report its state instead of failing the install.
+  const ptyBinary = path.join(root, 'node_modules/node-pty/prebuilds', `${process.platform}-${process.arch}`, 'pty.node');
+  console.log(existsSync(ptyBinary)
+    ? '\n[OK] PTY component (node-pty) is ready. The embedded terminal can run CLI tools.'
+    : '\n[!] PTY component (node-pty) is missing. The app still works; the terminal will report it as unavailable.\n    Remedy: npm.cmd install node-pty --save-optional, then npx @electron/rebuild -f -w node-pty');
   console.log('\n[OK] Dependencies and Electron runtime are ready. Run the development launcher.');
 } catch (error) {
   console.error(`\n[!] ${error.message}\nLogs: ${path.join(root, '.cache/npm/_logs')}\nTry the other source: npm.cmd run setup:${source === 'mirror' ? 'official' : 'mirror'}`);

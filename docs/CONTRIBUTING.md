@@ -14,6 +14,10 @@
 
 添加厂商适配器不要在 Runs 中增加厂商 switch。解析器测试应包含真实脱敏 fixture：分片、CRLF、错误、中断、重复事件。不要把 Key、HOME 下凭证或实际对话样本提交进代码。
 
+新适配器还需要 `interactive(config)`（返回 `{ command, args }`，**不带** `-p`/输出格式），交互式终端用它拉起 CLI 自己的 TUI；不实现该方法的适配器（如纯 API 连接）在终端里会给出明确提示而不是失败。
+
+终端相关改动：UI 侧只经 `window.studio.terminal*` 与 `onTerminal`；`apps/desktop/terminal.ts` 的 PTY 依赖可注入，单测用假 PTY，不要依赖本机 `node-pty` 或真实 CLI。改动 PTY 启动参数时同时更新 `tests/terminal.test.ts`。
+
 UI 组件允许导入 contracts 类型，不允许 node:*、electron 或 packages/core/providers。桌面端对返回对象作序列化，UI 不应依赖实例方法。
 
 完成改动后：`npm.cmd run check`；涉及 UI/IPC 再 build 和 test:desktop；涉及包资源再验证 pack:win。桌面测试使用独立 `.cache/desktop-smoke-*` 数据，不改实际项目文件。

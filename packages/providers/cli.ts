@@ -29,7 +29,18 @@ export function createCliParser(kind: ProviderConfig['kind'], emit: (e: Provider
     if (text) emit({ type: 'text', text });
   });
 }
+// Interactive launch drops every headless flag so the CLI runs its own TUI in the terminal.
+const interactiveDefaults: Partial<Record<ProviderConfig['kind'], { command: string; flag: string }>> = {
+  'codex-cli': { command: 'codex', flag: '-m' },
+  'claude-cli': { command: 'claude', flag: '--model' },
+  'gemini-cli': { command: 'gemini', flag: '-m' },
+};
 export class CliAdapter implements ProviderAdapter {
+  interactive(config: ProviderConfig) {
+    const preset = interactiveDefaults[config.kind];
+    if (!preset) throw Error('不支持的 CLI');
+    return { command: config.executable || preset.command, args: config.model.trim() ? [preset.flag, config.model.trim()] : [] };
+  }
   async run({ config, cwd, prompt, signal }: ProviderInput, emit: (event: ProviderEvent) => void) {
     const defaults = { 'codex-cli': 'codex', 'claude-cli': 'claude', 'gemini-cli': 'gemini' };
     const command = config.executable || defaults[config.kind as keyof typeof defaults];

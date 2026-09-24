@@ -16,7 +16,7 @@ process.on('SIGINT', () => void close());
 process.on('SIGTERM', () => void close());
 try {
   console.log('[1/4] Building desktop main process...');
-  await build({ entryPoints: ['apps/desktop/main.ts'], bundle: true, platform: 'node', format: 'cjs', outfile: 'dist/main/main.cjs', external: ['electron'], sourcemap: true });
+  await build({ entryPoints: ['apps/desktop/main.ts'], bundle: true, platform: 'node', format: 'cjs', outfile: 'dist/main/main.cjs', external: ['electron', 'node-pty'], sourcemap: true });
   console.log('[2/4] Building secure preload...');
   await build({ entryPoints: ['apps/desktop/preload.ts'], bundle: true, platform: 'node', format: 'cjs', outfile: 'dist/main/preload.cjs', external: ['electron'] });
   console.log('[3/4] Starting local UI server (127.0.0.1:5173)...');

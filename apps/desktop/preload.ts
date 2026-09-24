@@ -18,8 +18,21 @@ const bridge: StudioBridge = {
   relocateProject: id => ipcRenderer.invoke('studio:relocateProject', id),
   tree: (id, path) => ipcRenderer.invoke('studio:tree', id, path),
   readFile: (id, path) => ipcRenderer.invoke('studio:readFile', id, path),
+  gitStatus: id => ipcRenderer.invoke('studio:gitStatus', id),
+  gitCheckout: (id, branch) => ipcRenderer.invoke('studio:gitCheckout', id, branch),
+  terminalStart: sessionId => ipcRenderer.invoke('studio:terminalStart', sessionId),
+  terminalWrite: (sessionId, data) => ipcRenderer.invoke('studio:terminalWrite', sessionId, data),
+  terminalResize: (sessionId, cols, rows) => ipcRenderer.invoke('studio:terminalResize', sessionId, cols, rows),
+  terminalStop: sessionId => ipcRenderer.invoke('studio:terminalStop', sessionId),
+  openExternalTerminal: sessionId => ipcRenderer.invoke('studio:openExternalTerminal', sessionId),
+  onTerminal: callback => {
+    const listener = (_: Electron.IpcRendererEvent, event: import('../../packages/contracts').TerminalEvent) => callback(event);
+    ipcRenderer.on('studio:terminal', listener); return () => ipcRenderer.removeListener('studio:terminal', listener);
+  },
   createSession: (projectId, providerId, model) => ipcRenderer.invoke('studio:createSession', projectId, providerId, model),
   configureSession: (id, providerId, model) => ipcRenderer.invoke('studio:configureSession', id, providerId, model),
+  grantAuthorization: (sessionId, grant) => ipcRenderer.invoke('studio:grantAuthorization', sessionId, grant),
+  clearGrants: sessionId => ipcRenderer.invoke('studio:clearGrants', sessionId),
   providerModels: (id, discover) => ipcRenderer.invoke('studio:providerModels', id, discover),
   saveProvider: (config, key) => ipcRenderer.invoke('studio:saveProvider', config, key),
   deleteProvider: id => ipcRenderer.invoke('studio:deleteProvider', id),

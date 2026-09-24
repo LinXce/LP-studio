@@ -104,10 +104,10 @@
 .window-controls .window-close:hover { background: #c43b43; color: white; }
 .window-control-divider { height: 18px; width: 1px; background: var(--border); margin: 0 4px; }
 .project-select { min-width: 0; }
-.project-select > svg { flex-shrink: 0; }
-.project-select select { min-width: 0; }
+.project-select .picker { flex: 1; min-width: 0; }
+.project-select .picker-trigger { width: 100%; padding: 8px 4px 8px 0; font-size: 12px; color: inherit; background: none; border: 0; border-radius: 0; }
 .project-select:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent); }
-.project-select select:focus-visible { outline: none; }
+.project-select .picker-trigger:focus-visible { outline: none; }
 .confirmation-dialog { width: min(520px, calc(100vw - 64px)); max-height: calc(100vh - 80px); overflow: auto; padding: 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: 0 20px 80px #0006; color-scheme: var(--control-scheme); }
 .confirmation-dialog::backdrop { background: #0008; }
 .confirmation-heading { display: flex; gap: 12px; align-items: center; color: var(--accent); }
@@ -132,14 +132,82 @@
 .session-row.selected .session-open { color: var(--accent); }
 .session-tab { font-size: 11px; }
 
-/* Provider and actual model share the active theme and leave room for Send. */
-.composer-bottom { gap: 8px; align-items: flex-start; }
-.session-picker { display: flex; flex: 1; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; }
-.session-picker .model-select { min-width: 0; max-width: 100%; }
-.session-picker .connection-picker { margin-right: auto; flex: 1 1 100px; }
-.session-picker .actual-model { flex: 1 1 110px; }
-.session-picker .model-select select { width: 100%; min-width: 0; text-overflow: ellipsis; }
-.session-picker .catalog-refresh { flex: 0 0 26px; }
-.session-picker .custom-model { display: flex; align-items: center; flex: 1 0 100%; gap: 4px; }
-.session-picker .custom-model input { width: 0; flex: 1; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 5px; }
-.composer-bottom > button { flex-shrink: 0; }
+/* Embedded CLI terminal: the PTY lives in the main process, xterm only renders bytes. */
+.terminal-view { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: #0e1017; }
+.terminal-view .tabs { background: transparent; }
+.terminal-view .terminal-toolbar { height: 36px; min-height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; background: var(--subtle); border-bottom: 1px solid var(--border); }
+.terminal-view .terminal-toolbar .row { display: flex; align-items: center; gap: 14px; }
+.terminal-view .terminal-label { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: .5px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-notice { padding: 10px 14px; font-size: 11px; color: var(--toast-warning-text); background: var(--toast-warning-bg); border-bottom: 1px solid var(--toast-warning-border); }
+.terminal-boot { padding: 7px 14px; font-size: 11px; color: var(--muted); background: var(--subtle); border-bottom: 1px solid var(--border); }
+.terminal-host { flex: 1; min-height: 0; min-width: 0; overflow: clip; padding: 8px 0 8px 8px; }
+.terminal-host .xterm { height: 100%; }
+.terminal-empty { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--muted); }
+/* xterm handles composition; hide its duplicate preedit paint without changing IME layout. */
+.terminal-host .xterm-helpers { left: 0; }
+.terminal-host .xterm-helper-textarea { left: var(--terminal-ime-x, 0px) !important; top: var(--terminal-ime-y, 0px) !important; }
+.terminal-host .composition-view { opacity: 0; }
+
+.terminal-empty-icon { width: 60px; height: 60px; display: grid; place-items: center; border-radius: 18px; background: var(--subtle); border: 1px solid var(--border); color: var(--accent); }
+.terminal-empty h2 { margin: 4px 0 0; font-size: 20px; font-weight: 500; color: var(--text); }
+.terminal-empty p { margin: 0; font-size: 12px; }
+.terminal-empty-picker { display: flex; justify-content: center; margin: 6px 0 2px; }
+.terminal-empty-create { padding: 9px 16px; }
+.terminal-empty small { font-size: 10px; }
+
+/* Inline authorization request: a headless CLI cannot prompt, so the denial becomes a message. */
+.message.authorize { border: 1px solid var(--toast-warning-border); background: var(--toast-warning-bg); color: var(--toast-warning-text); border-radius: 8px; padding: 12px 14px; line-height: 1.7; }
+.message.authorize .authorize-head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; font-size: 11px; letter-spacing: .5px; }
+.message.authorize p { margin: 0 0 10px; font-size: 12px; }
+.message.authorize .authorize-actions { display: flex; align-items: center; gap: 8px; }
+.message.authorize .authorize-actions button { font-size: 11px; padding: 5px 10px; border-radius: 5px; color: inherit; }
+.message.authorize .authorize-actions button:hover:not(:disabled) { color: inherit; background: var(--selected); }
+.message.authorize .authorize-actions .accent { background: var(--accent); color: var(--control-bg); }
+.message.authorize .authorize-actions .accent:hover:not(:disabled) { color: var(--control-bg); opacity: .85; }
+.composer-hint .text-button { margin-left: 8px; padding: 0; font-size: 9px; }
+
+/* Composer bottom: Git on the left, connection + model on the right. */
+.composer-bottom { gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.composer-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; }
+.session-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.composer-bottom > button, .composer-controls > button { flex-shrink: 0; }
+.spin { animation: spin 900ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* One popup picker for every selection outside of forms. */
+.picker { position: relative; min-width: 0; }
+.picker-trigger { gap: 6px; max-width: 100%; padding: 5px 8px; font-size: 11px; color: var(--control-text); background: var(--subtle); border: 1px solid var(--border); border-radius: 5px; }
+.picker-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-trigger > svg:last-child { flex-shrink: 0; color: var(--muted); }
+.picker-trigger:hover:not(:disabled), .picker.open .picker-trigger { border-color: var(--accent); color: var(--text); }
+.picker-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; display: flex; flex-direction: column; min-width: 200px; width: max-content; max-width: min(320px, calc(100vw - 40px)); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 18px 50px #0008; color-scheme: var(--control-scheme); }
+.picker-panel.up { top: auto; bottom: calc(100% + 8px); }
+.picker-scroll { max-height: 300px; overflow: auto; padding: 4px; }
+.picker-option { width: 100%; justify-content: flex-start; gap: 7px; padding: 7px 8px; font-size: 11px; color: var(--text); border-radius: 6px; }
+.picker-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-option small { flex-shrink: 0; font-size: 9px; color: var(--muted); }
+.picker-option > svg:last-child { flex-shrink: 0; color: var(--accent); }
+.picker-option.active, .picker-option:hover { background: var(--selected); color: var(--text); }
+.picker-option.selected { color: var(--accent); }
+.picker-empty { margin: 14px 10px; font-size: 11px; text-align: center; color: var(--muted); }
+.picker-actions { display: flex; align-items: center; gap: 14px; padding: 7px 10px; border-top: 1px solid var(--border); }
+.picker-panel .custom-model { display: flex; align-items: center; gap: 5px; padding: 7px 10px; border-top: 1px solid var(--border); }
+.picker-panel .custom-model input { flex: 1; min-width: 0; padding: 5px 6px; font-size: 11px; color: var(--text); background: var(--subtle); border: 1px solid var(--border); border-radius: 4px; }
+
+.git-badge { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 11px; }
+.git-badge.muted { opacity: .85; }
+.git-repo { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.git-repo > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.git-badge .picker-trigger.git-branch { max-width: 200px; }
+
+/* The composer sits at the bottom and the model pill at the right edge. */
+.session-picker .picker-trigger.connection-picker { max-width: 160px; }
+.session-picker .picker-trigger.model-pill { max-width: 240px; }
+.session-picker .picker-panel { left: auto; right: 0; }
+.project-select .picker-panel { min-width: 0; width: 100%; max-width: 100%; }
+
+@container (max-width: 460px) {
+  .git-repo > span { max-width: 80px; }
+  .session-picker .picker-trigger.connection-picker { max-width: 110px; }
+  .session-picker .picker-trigger.model-pill { max-width: 150px; }
+}

@@ -79,7 +79,9 @@ test('run captures session model before async execution and passes it to CLI', a
   const executable = path.join(root, 'model-fixture.mjs');
   await writeFile(executable, `import assert from 'node:assert/strict';
     assert.equal(process.argv[process.argv.indexOf('--model') + 1], 'selected-model');
-    for await (const chunk of process.stdin) {}
+    let input = ''; for await (const chunk of process.stdin) input += chunk;
+    assert.ok(input.includes('check selection'), 'prompt carries the request');
+    assert.equal(input, 'check selection', 'a first plain message goes through untouched');
     console.log(JSON.stringify({type:'result', subtype:'success', finalText:'model-ok'}));`);
   store.state.providers.push({ id: 'p', kind: 'command-cli', name: 'test', model: 'global-model', executable, baseUrl: '', timeoutMs: 10000 });
   store.state.sessions.push({ id: 's', projectId: 'project', providerId: 'p', model: 'selected-model', title: '新会话', messages: [], updatedAt: '' });
@@ -94,3 +96,67 @@ test('run captures session model before async execution and passes it to CLI', a
   assert.equal(store.session('s').messages.at(-1)?.text, 'model-ok');
   assert.equal(new Store(store.dir).session('s').model, 'selected-model');
 });
+test('a denied tool becomes an in-stream authorization that the grant then resolves', async t => {
+  const { store, files, root, project } = await fixture(t);
+  const { Runs, grantForDenial, sameGrant, editInstructions, buildPrompt } = await import('../packages/core/runs');
+  const outside = path.join(root, 'outside'); await mkdir(outside); await writeFile(path.join(outside, 'shared.ts'), 'export const shared = 1;\n');
+  const target = path.join(outside, 'shared.ts');
+  const executable = path.join(root, 'deny-fixture.mjs');
+  await writeFile(executable, `console.log(JSON.stringify({ type: 'event', event: { type: 'tool_queued', toolName: 'read_file', input: { file_path: ${JSON.stringify(target)} } } }));
+console.log(JSON.stringify({ type: 'event', event: { type: 'tool_denied', toolName: 'read_file' } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', finalText: '' }));
+`);
+  store.state.providers.push({ id: 'p', kind: 'command-cli', name: 'test', model: 'm', executable, baseUrl: '', timeoutMs: 10000 });
+  store.state.sessions.push({ id: 's', projectId: 'project', providerId: 'p', model: 'm', title: '新会话', messages: [], updatedAt: '' });
+  const run = async (prompt: string, retry = false) => {
+    const events: import('../packages/contracts').StreamEvent[] = [];
+    let done!: () => void; const finished = new Promise<void>(resolve => { done = resolve; });
+    new Runs(store, files, async () => undefined, event => { events.push(event); if (event.type === 'done') done(); }).start({ sessionId: 's', prompt, context: [], retry });
+    await finished; return events;
+  };
+  const first = await run('read the shared file');
+  const authorize = first.find(event => event.authorize)?.authorize;
+  assert.ok(authorize, JSON.stringify(first));
+  assert.equal(authorize.tool, 'read_file');
+  assert.equal(authorize.detail, target);
+  assert.deepEqual(authorize.grant, { directory: outside });
+  assert.equal(authorize.prompt, 'read the shared file');
+
+  // A grant that did not help escalates instead of going silent, and only the last step reports the run as stuck.
+  store.session('s').grants = [{ directory: outside }];
+  const second = await run('read it again');
+  const escalated = second.find(event => event.authorize)?.authorize;
+  assert.deepEqual(escalated?.grant, { all: true });
+  assert.match(escalated!.description, /已授权/);
+
+  store.session('s').grants = [{ all: true }];
+  const third = await run('read it again');
+  assert.equal(third.some(event => event.authorize), false);
+  assert.match(third.filter(event => event.type === 'status').map(event => event.text).join(''), /已授权全部工具仍被拒绝/);
+
+  // Only a real directory outside the project earns a directory grant; everything else needs the broad one.
+  assert.deepEqual(grantForDenial(project, '/nope/missing.ts'), { all: true });
+  assert.deepEqual(grantForDenial(project, 'hello.ts'), { all: true });
+  assert.deepEqual(grantForDenial(project, target), { directory: outside });
+  assert.equal(sameGrant({ directory: 'a' }, { directory: 'a' }), true);
+  assert.equal(sameGrant({ directory: 'a' }, { all: true }), false);
+
+  // A retry replaces the abandoned answer and the prompt, so the transcript keeps one bubble per turn.
+  const before = { assistant: store.session('s').messages.filter(m => m.role === 'assistant').length, user: store.session('s').messages.filter(m => m.role === 'user').length };
+  await run('read it again', true);
+  assert.equal(store.session('s').messages.filter(m => m.role === 'assistant').length, before.assistant);
+  assert.equal(store.session('s').messages.filter(m => m.role === 'user').length, before.user);
+
+  // The prompt must describe the granted scope, not claim there are no tools.
+  assert.match(editInstructions([]), /本次运行只允许读取文件/);
+  assert.match(editInstructions([{ all: true }]), /本会话已获授权使用全部工具/);
+  assert.match(editInstructions([{ directory: 'C:\\x' }]), /本次运行只允许读取文件/);
+
+  // A plain first message is sent verbatim, so a question is not dressed up as a coding task.
+  assert.equal(buildPrompt({ grants: [], history: [], context: [], request: 'return 1' }), 'return 1');
+  assert.deepEqual(JSON.parse(buildPrompt({ grants: [], history: [{ role: 'user', content: 'hi' }], context: [], request: 'return 1' })), { history: [{ role: 'user', content: 'hi' }], context: [], request: 'return 1' });
+  const withFile = buildPrompt({ grants: [], history: [], context: [{ path: 'a.ts', content: 'x' }], request: 'edit' });
+  assert.match(withFile, /^你在 LP Studio 中协助用户。/);
+  assert.match(withFile, /lp-edit/);
+});
+

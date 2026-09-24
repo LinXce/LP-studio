@@ -8,12 +8,12 @@
 |---|---|---|
 | P0 | 四栏桌面窗口、图标菜单、可折叠可拖动面板 | 已实现 |
 | P0 | 项目选择、目录树、会话、显式文件上下文 | 已实现 |
-| P0 | 七类 CLI/API 连接、统一流、停止/超时/错误 | 已实现，真实平台联调范围见 VALIDATION |
+| P0 | 八类 CLI/API 连接、统一流、停止/超时/错误 | 已实现，真实平台联调范围见 VALIDATION |
 | P0 | 文件预览、语法高亮、行号、编辑副本、diff | 已实现，本地 Monaco assets，无 CDN |
 | P0 | 提案确认、哈希冲突检测、单文件应用和回滚 | 已实现，UTF-8 现有文件 |
 | P0 | Key 系统加密、受限 IPC、命令主题确认 | 已实现 |
 | P0 | Windows 便携目录、数据复制、项目重新定位 | 已实现 |
-| P1 | 交互式 PTY、xterm.js、终端尺寸变化 | 待实现，当前是非交互 PowerShell/CLI |
+| P1 | 交互式 PTY、xterm.js、终端尺寸变化 | 已实现：`node-pty` + PTY transport + 终端视图；见「终端 transport」 |
 | P1 | CLI 能力探测、版本兼容矩阵、厂商会话恢复 | 当前只有 --version 检测；会话历史由应用回放 |
 | P1 | Git worktree、跨文件事务、冲突合并和新文件 | 待实现 |
 | P1 | 会话检索/删除/导出、数据保留与加密导出 | 检索与删除已实现；导出与保留策略待实现 |
@@ -64,33 +64,43 @@ flowchart TB
     Vault --> API
     Core --> Disk[项目文件 / 会话 / 修改快照]
   end
-  Process --> LocalCLI[本机 Codex / Claude / Gemini / Command]
+  Process --> LocalCLI[本机 Codex / Claude / Gemini / Command / Antigravity]
   HTTP --> Endpoint[官方或用户自定义 API]
 ```
+
+## 终端 transport（PTY）
+
+交互式终端与 headless 事件流是两条并存的 transport：
+
+- **PTY transport（当前主界面）**：`apps/desktop/terminal.ts` 用可选依赖 `node-pty` 起真终端（Windows ConPTY），`pty.spawn(executable, args, { cwd, env, cols, rows, name: 'xterm-256color' })`；启动参数来自适配器的 `interactive()`（不带 `-p`）。字节双向经 `studio:terminal` 推送与 `terminalWrite/terminalResize/terminalStop` 回传，UI 用 xterm.js 渲染。每个会话一个 PTY，会话切换与窗口重载时终止。
+- **关键约束**：`.cmd`/npm wrapper 解析出的入口是 `process.execPath`，而 Electron 二进制作为 PTY 子进程会静默退出，因此交互式启动改用 PATH 中的 `node`（`resolveNodeRuntime()`）；找不到 node 时报明确错误。
+- **pipes transport（保留）**：`runProcess` 的非交互路径，用于 headless 适配器与一次性命令面板，二者共用 `resolveExecutable`，都不过 shell。
+- 回退：`node-pty` 缺失时 `TerminalService.start` 返回 `{ ok: false, message }`，UI 显示原因与补救命令，应用其余部分不受影响。
 
 ## 模块边界与数据流
 
 | 模块 | 责任 | 不承担的责任 |
 |---|---|---|
-| `apps/ui` | 四栏展示、输入、流渲染、面板状态 | 不读密钥、不直接读盘、不启动进程 |
-| `packages/contracts` | 配置 schema、请求响应类型、流事件 | 不导入 UI 和平台 API |
-| `apps/desktop` | 生命周期、原生目录选择、确认请求管理、IPC、safeStorage | 不解析厂商输出 |
-| `packages/core` | 项目/会话、上下文、修改提案和恢复 | 不引用 React |
-| `packages/providers` | 适配器、进程调用、SSE/JSONL、超时响应 | 不决定界面布局或文件写权限 |
+| `apps/ui` | 四栏展示、输入、流渲染、面板状态、终端渲染（xterm.js） | 不读密钥、不直接读盘、不启动进程 |
+| `packages/contracts` | 配置 schema、请求响应类型、流事件、终端事件 | 不导入 UI 和平台 API |
+| `apps/desktop` | 生命周期、原生目录选择、确认请求管理、IPC、safeStorage、PTY 终端服务 | 不解析厂商输出 |
+| `packages/core` | 项目/会话、上下文、修改提案和恢复、Git 状态与分支切换 | 不引用 React |
+| `packages/providers` | 适配器、进程调用、SSE/JSONL、超时响应、交互式启动参数 | 不决定界面布局或文件写权限 |
 | `tests` | 契约、安全与流测试 | 不依赖付费模型或真实 Key |
 
 ### 一轮对话
 
 1. UI 提交会话 ID、提示、明确勾选的相对文件路径。
-2. 主进程校验来源 frame、请求 schema、会话/项目/Provider 关系。
-3. 主题对话框显示主进程确认请求中的目标 CLI 或 API、项目、上下文数量/费用提醒。
-4. Runs 读取受保护路径检查后的快照，构造最近 20 条消息与本轮上下文。
-5. CLI 从 stdin 收到提示，不将它插入 shell 命令。API Key 只在主进程取出放进 HTTP header。
-6. Adapter 将厂商输出转为统一事件，主进程把事件推送给正确会话，UI 实时渲染。
-7. 文本中 `lp-edit` 代码块经 JSON 解析，只接受本轮上下文中的现有文件。
-8. FileService 保存 before/after/baseHash 的待审核提案，不自动写文件。
-9. 用户预览 diff 并确认；主进程再次比对哈希，写同目录临时文件后 rename。
-10. 回滚同样检查当前内容哈希。重启后根据 applying/rolling-back 日志状态和实际内容恢复状态。
+2. 主进程校验来源 frame、请求 schema、会话/项目/Provider 关系。运行不再弹确认框：目标连接与模型由 UI 在输入框底栏常驻显示。
+3. Runs 读取受保护路径检查后的快照，构造最近 20 条消息与本轮上下文。
+4. CLI 从 stdin 收到提示，不将它插入 shell 命令。提示词只在需要时构造：本轮有上下文文件时才带 lp-edit 契约，且工具说明随会话授权变化（未授权时声明只读、已授权时声明可用全部工具但修改仍走提案）；首轮既无历史也无上下文时直接把用户原话发过去，避免把普通提问包装成代码任务。API Key 只在主进程取出放进 HTTP header。
+5. Adapter 将厂商输出转为统一事件（text / status / tool），主进程把事件推送给正确会话，UI 实时渲染。
+6. 工具被 CLI 拒绝时，Runs 把最近一次拒绝解析成最小授权（目录或全部工具），随事件下发为 `authorize`；UI 在对话流中渲染授权气泡。headless CLI 无法中途询问权限，这是唯一可行的授权入口。
+7. 用户批准后主进程把授权写入 `Session.grants` 并带上它重跑同一轮（`retry` 不重复追加用户消息）；会话内已生效的授权不再询问。
+8. 文本中 `lp-edit` 代码块经 JSON 解析，只接受本轮上下文中的现有文件。
+9. FileService 保存 before/after/baseHash 的待审核提案，不自动写文件。
+10. 用户预览 diff 并确认；主进程再次比对哈希，写同目录临时文件后 rename。
+11. 回滚同样检查当前内容哈希。重启后根据 applying/rolling-back 日志状态和实际内容恢复状态。
 
 临时文件 + rename 降低半写入风险，不等同于断电耐久事务；外部恶意进程在最终检查和 rename 间仍可能造成 TOCTOU。严格隔离需要 worktree/容器/OS 沙箱与受控文件句柄。
 
@@ -116,7 +126,8 @@ interface ProviderAdapter {
 | Codex CLI | `exec --json --sandbox read-only` + stdin `-` | item.completed / agent_message | 请求只读，approval_policy never |
 | Claude Code | `-p --output-format stream-json --verbose --include-partial-messages` + stdin | text_delta；非增量版本回退 assistant 内容 | `--tools ""`，strict empty MCP |
 | Gemini CLI | `-p` + stdin，`--output-format stream-json` | assistant message / content | `--approval-mode plan` |
-| Command CLI（cmdc） | `-p` + stdin，`--output-format json` | event.text_delta / result.finalText | `--permission-mode plan`；禁用会话持久化与 skills、跳过 onboarding 和自动更新 |
+| Command CLI（cmdc） | `-p` + stdin，`--output-format json` | event.text_delta / result.finalText | `--permission-mode plan`；禁用会话持久化与 skills、跳过 onboarding 和自动更新；写文件与执行命令由 CLI 的 print 闸门拦截。会话授权映射为 `--add-dir <dir>` 或 `--yolo`（后者不再传 plan，因 plan 分支先于 bypass 判定） |
+| Antigravity CLI（agy） | `-p` + stdin，`--output-format stream-json` | text_delta / assistant message / result.response | `--mode plan`、`--sandbox`；关闭斜杠命令展开与启动 Logo；不枚举模型目录 |
 | OpenAI/兼容 | chat/completions POST | SSE choices.delta.content | 首版无自动工具调用 |
 | Anthropic | messages POST | content_block_delta，message_stop | 同上 |
 | Gemini API | OpenAI 兼容基础端点 | 同 OpenAI SSE | 同上 |
@@ -135,7 +146,7 @@ PTY 阶段采用可选 transport，接口增加 stdin write、resize、exit 信�
 
 - 第一栏 56px，仅图标，原生 title tooltip 和 aria-label；工作台、会话、模型、终端、设置。底部放折叠入口。
 - 第二栏默认 258px，190–380px 可拖动；项目下拉、会话、递归文件树、上下文复选框和数量。Ctrl+B 折叠。
-- 第三栏自适应，至少 330px；会话标签、执行状态、逐条消息、日志、修改记录、上下文 chips、输入框、模型选择、运行/停止。Ctrl+Enter 发送。模型随会话固定。
+- 第三栏自适应，至少 330px；会话标签、执行状态、逐条消息、日志、修改记录、上下文 chips、输入框、运行/停止。Enter 发送、Shift+Enter 换行（输入法组合期间不发送）。模型随会话固定。输入框底栏左侧为 Git 仓库与分支，右侧为 CLI 连接与模型。项目、连接、模型和分支共用同一套弹层组件（无搜索、无收藏，支持 ↑↓ 与回车）；表单下拉框仍使用系统控件。底部通知按信息/成功/警告/错误四级取主题配色，错误与警告用 `role="alert"`。
 - 第四栏默认 440px，280–720px 可拖动；路径、只读/编辑切换、Monaco、本地 diff、应用/回滚入口。Ctrl+J 折叠。窄窗口可折叠面板；总宽度超出时横向滚动，不重排成网站移动布局。
 - 文件树选择打开预览；反引号包围的相对文件路径可跳转，接受 path:line 后缀（目前打开文件，不定位具体行）；文本和日志均作为普通文本渲染，不执行模型 HTML。
 - 编辑默认只是内存副本；离开未保存副本需确认；生成提案后才进入 diff 审核。
@@ -151,6 +162,10 @@ PTY 阶段采用可选 transport，接口增加 stdin write、resize、exit 信�
 6. 不上传应用数据、不加遥测；调用远端模型会发送提示/历史/上下文，本地优先不代表模型在本地推理。
 7. 命令逐次确认，主进程无任意静默命令接口；终端拥有当前用户权限。CLI 按其原有权限运行，不能从 prompt 约定推导出 OS 安全保证。
 8. 单实例防止同一应用的数据并发写。JSON 是原子替换，无索引/无限增长治理；建议重要项目额外 Git 备份。
+9. Git 只读探测仓库与分支；切换分支先经确认再执行 `git checkout`，仅限本地已有分支，不访问远端、不丢弃提交，项目内有运行任务时拒绝。参数以数组传递，不经过 shell。
+10. 工具授权按会话保存（`Session.grants`），可随时清除，新建会话重置。目录授权只接受真实存在且位于项目外的路径；「全部工具」会同时放开写文件与执行命令，气泡内明确标注。只有能映射参数的适配器（`supportsGrants`）才发起授权请求，避免给出无效选项；其余适配器的拒绝只留在运行日志。
+11. 运行对话不再逐次弹窗确认。目标程序仍是输入框底栏常驻可见的连接；如果这个可见性不足，可改回确认框。
+12. 内嵌终端只启动**已注册 CLI 连接的入口**，参数由适配器的 `interactive()` 生成，不接受任意命令；任意命令仍走一次性命令面板（逐次确认）。终端复用 `resolveExecutable`，依旧不经过 shell/`cmd.exe`；CLI 在 PTY 里按自身权限运行，不是 OS 沙箱。
 
 ## 开发路线图（个人项目估算）
 

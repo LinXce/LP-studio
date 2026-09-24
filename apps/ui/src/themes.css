@@ -3,12 +3,20 @@
   --control-scheme: dark; --control-bg: #1a2233; --control-text: #a5b7e2;
   --surface: #151b27; --subtle: #111722; --text: #d8dce8;
   --muted: #91a0bb; --border: #30384a; --accent: #a1b2ff; --selected: #26334e;
+  --toast-info-bg: #1b2433; --toast-info-border: #3a4c6b; --toast-info-text: #c6d5f0;
+  --toast-success-bg: #16281f; --toast-success-border: #2f5a43; --toast-success-text: #b8e2c8;
+  --toast-warning-bg: #2b2417; --toast-warning-border: #5f4b23; --toast-warning-text: #ecd8a8;
+  --toast-error-bg: #352b31; --toast-error-border: #73505a; --toast-error-text: #f0cbd1;
 }
 :root[data-theme="industrial"] {
   color-scheme: light; color: #303b3b; background: #edf0ec;
   --control-scheme: light; --control-bg: #fafbf7; --control-text: #344b3a;
   --surface: #f7f8f4; --subtle: #ecefe9; --text: #303b3b;
   --muted: #65716e; --border: #ccd3cc; --accent: #147d70; --selected: #dfede5;
+  --toast-info-bg: #e6eef3; --toast-info-border: #a8c1cd; --toast-info-text: #2b4a58;
+  --toast-success-bg: #e5eee2; --toast-success-border: #bfd2b7; --toast-success-text: #3f6b45;
+  --toast-warning-bg: #fdf0dd; --toast-warning-border: #d9b183; --toast-warning-text: #84551f;
+  --toast-error-bg: #fff2e8; --toast-error-border: #d4a48b; --toast-error-text: #843f25;
 }
 [data-theme="industrial"] button:hover { color: #126a60; }
 [data-theme="industrial"] input, [data-theme="industrial"] select, [data-theme="industrial"] textarea { color: var(--text); background: #fafbf8; border-color: #c4cdc5; border-radius: 3px; }
@@ -32,7 +40,6 @@
 [data-theme="industrial"] .icon { color: #6b7e73; }
 [data-theme="industrial"] .icon:hover { background: #dce5da; }
 [data-theme="industrial"] .project-select { background: #f8faf5; border-color: #c4cfc3; color: #4b6e5e; border-radius: 3px; }
-[data-theme="industrial"] .project-select select { background: transparent; }
 [data-theme="industrial"] .section-label { color: #677e6f; font-family: "Cascadia Code", Consolas, "Microsoft YaHei", monospace; }
 [data-theme="industrial"] .section-label em, [data-theme="industrial"] .muted-small { color: #788778; }
 [data-theme="industrial"] .session-list { border-color: var(--border); }
@@ -48,6 +55,7 @@
 [data-theme="industrial"] .resize:hover { background: #228674; }
 /* The terminal remains dark in the light theme, with its own readable palette. */
 [data-theme="industrial"] .terminal-panel { color-scheme: dark; background: #171e1e; color: #d8e0d9; }
+[data-theme="industrial"] .terminal-view { background: #171e1e; }
 [data-theme="industrial"] .tabs { background: #e8ece5; border-color: var(--border); }
 [data-theme="industrial"] .tabs > button { color: #627467; border-color: var(--border); }
 [data-theme="industrial"] .tabs > button.active { background: #f8f9f5; color: #197665; border-top-color: #258675; }
@@ -59,10 +67,6 @@
 [data-theme="industrial"] .welcome-icon { color: #83bea6; background: #263630; border-color: #3a5145; border-radius: 5px; box-shadow: none; }
 [data-theme="industrial"] .welcome h1 { color: #e6ede3; }
 [data-theme="industrial"] .welcome p, [data-theme="industrial"] .eyebrow, [data-theme="industrial"] .welcome-note { color: #91aa9a; }
-[data-theme="industrial"] .starter-grid button { color: #98c2aa; background: #202e28; border-color: #3b4b3e; border-radius: 3px; }
-[data-theme="industrial"] .starter-grid button:hover { background: #2b3b31; border-color: #638268; }
-[data-theme="industrial"] .starter-grid strong { color: #ccdcca; }
-[data-theme="industrial"] .starter-grid small { color: #92ac98; }
 [data-theme="industrial"] .message-meta, [data-theme="industrial"] .message.user .message-meta { color: #9bcbb0; }
 [data-theme="industrial"] .message-meta time, [data-theme="industrial"] .message-meta small { color: #9aa99e; }
 [data-theme="industrial"] .message.user .message-text { background: #25322b; border-color: #3b4c3d; border-radius: 3px; }
@@ -78,7 +82,6 @@
 [data-theme="industrial"] .composer.command-mode { border-color: #c78955; }
 [data-theme="industrial"] .composer textarea { background: transparent; color: #344b3a; color-scheme: light; }
 [data-theme="industrial"] .composer textarea::placeholder { color: #768771; }
-[data-theme="industrial"] .model-select { color: #54815e; }
 [data-theme="industrial"] .send, [data-theme="industrial"] .primary { background: #c25b2a; color: #fffaf5; border-radius: 3px; }
 [data-theme="industrial"] .send:hover, [data-theme="industrial"] .primary:hover { background: #a94a1f; color: #fff; }
 [data-theme="industrial"] .stop { background: #f0dac6; color: #895028; }
@@ -98,7 +101,6 @@
 [data-theme="industrial"] .secondary { background: #e5ecdf; color: #4e7043; border-color: #bfceb6; border-radius: 3px; }
 [data-theme="industrial"] .probe-result { background: #e5eee2; color: #416d45; border-color: #bfd2b7; }
 [data-theme="industrial"] .running-dot { background: #65b898; }
-[data-theme="industrial"] .toast { background: #fff2e8; color: #843f25; border-color: #d4a48b; }
 [data-theme="industrial"] ::-webkit-scrollbar-thumb { background: #9caf99; }
 
 /* Give native popup options an opaque palette; transparent selects otherwise
@@ -106,12 +108,11 @@
 select { color-scheme: var(--control-scheme); accent-color: var(--accent); }
 select option, select optgroup { background-color: var(--control-bg); color: var(--control-text); }
 select option:checked { background-color: var(--selected); color: var(--accent); }
-.model-select { color: var(--muted); min-width: 0; gap: 4px; }
-.model-select > svg { flex-shrink: 0; }
-.model-select select {
-  min-width: 0; background-color: var(--control-bg); color: var(--control-text);
-  border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
-}
-.model-select select:hover:not(:disabled) { border-color: var(--accent); }
-.model-select select:focus-visible { outline-color: var(--accent); }
-.model-select select:disabled { color: var(--muted); opacity: 1; cursor: not-allowed; }
+
+/* Bottom notices keep one shape and take their colour from the theme and severity. */
+.toast.info { background: var(--toast-info-bg); border-color: var(--toast-info-border); color: var(--toast-info-text); }
+.toast.success { background: var(--toast-success-bg); border-color: var(--toast-success-border); color: var(--toast-success-text); }
+.toast.warning { background: var(--toast-warning-bg); border-color: var(--toast-warning-border); color: var(--toast-warning-text); }
+.toast.error { background: var(--toast-error-bg); border-color: var(--toast-error-border); color: var(--toast-error-text); }
+.toast .icon { color: inherit; }
+.toast .icon:hover { color: inherit; opacity: .7; }

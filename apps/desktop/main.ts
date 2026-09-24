@@ -1,20 +1,24 @@
 import { app, BrowserWindow, dialog, ipcMain, session as electronSession } from 'electron';
-import { existsSync, mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { providerSchema } from '../../packages/contracts';
+import { grantSchema, providerSchema } from '../../packages/contracts';
 import { Store } from '../../packages/core/storage';
 import { ensureDefaultProviders } from '../../packages/core/defaults';
 import { FileService, listFiles, readSnapshot } from '../../packages/core/files';
-import { Runs } from '../../packages/core/runs';
+import { gitCheckout, gitStatus } from '../../packages/core/git';
+import { Runs, sameGrant } from '../../packages/core/runs';
 import { configureSession, sessionConfig } from '../../packages/core/sessions';
 import { configuredModels } from '../../packages/providers/models';
-import { adapterFor } from '../../packages/providers';
+import { adapterFor, defaultExecutable } from '../../packages/providers';
+import { consoleLine } from '../../packages/providers/process';
 import { apiEndpoint } from '../../packages/providers/api';
 import { Vault } from './vault';
+import { TerminalService } from './terminal';
 import packageInfo from '../../package.json';
 const devUrl = !app.isPackaged ? process.env.LP_DEV_URL : undefined;
 const base = app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd();
@@ -23,9 +27,9 @@ const dataDir = portable ? path.join(base, '.lp-data') : path.join(app.getPath('
 mkdirSync(dataDir, { recursive: true }); app.setPath('userData', path.join(dataDir, 'electron'));
 const locked = app.requestSingleInstanceLock();
 if (!locked) { console.log('[desktop] Another instance is running; activating its window.'); app.quit(); }
-let win: BrowserWindow | undefined; let runs: Runs | undefined;
+let win: BrowserWindow | undefined; let runs: Runs | undefined; let terminals: TerminalService | undefined;
 app.on('second-instance', () => { if (win?.isMinimized()) win.restore(); win?.show(); win?.focus(); });
-app.on('before-quit', () => runs?.stopAll());
+app.on('before-quit', () => { runs?.stopAll(); terminals?.stopAll(); });
 app.on('window-all-closed', () => app.quit());
 const idSchema = z.string().uuid(); const relativeSchema = z.string().max(2000);
 async function main() {
@@ -42,6 +46,12 @@ async function main() {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false } });
   win.once('ready-to-show', () => { win?.show(); win?.focus(); console.log('[desktop] Window visible.'); });
   win.webContents.on('render-process-gone', (_event, details) => console.error('[desktop] Renderer exited:', details.reason));
+  // The dev build traces the terminal input path in the renderer; surface those lines here so they can be
+  // read (and copied) from the console the app was started from.
+  win.webContents.on('console-message', (event, ...rest) => {
+    const message = typeof rest[0] === 'string' ? rest[0] : String((event as unknown as { message?: string }).message ?? '');
+    if (message.includes('[term]')) console.log(message);
+  });
   win.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
     if (isMainFrame && code !== -3) console.error(`[desktop] UI load failed (${code}): ${description}`);
   });
@@ -53,6 +63,7 @@ async function main() {
   electronSession.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   electronSession.defaultSession.setPermissionCheckHandler(() => false);
   runs = new Runs(store, files, id => vault.get(id), event => { if (win && !win.isDestroyed()) win.webContents.send('studio:event', event); });
+  terminals = new TerminalService(store, event => { if (win && !win.isDestroyed()) win.webContents.send('studio:terminal', event); });
   const handle = (name: string, handler: (...args: any[]) => unknown) => ipcMain.handle(`studio:${name}`, (event, ...args) => {
     if (event.sender !== win?.webContents || event.senderFrame !== win.webContents.mainFrame || !trusted(event.senderFrame.url)) throw Error('未授权的 IPC 来源');
     return handler(...args);
@@ -60,9 +71,11 @@ async function main() {
   const pendingRuns = new Set<string>();
   const pendingConfirmations = new Map<string, (accepted: boolean) => void>();
   const cancelConfirmations = () => { for (const resolve of pendingConfirmations.values()) resolve(false); pendingConfirmations.clear(); };
-  win.on('closed', cancelConfirmations);
-  win.webContents.on('did-start-loading', cancelConfirmations);
-  win.webContents.on('render-process-gone', cancelConfirmations);
+  // A renderer that goes away loses the terminal buffer, so its PTY is stopped with it.
+  const release = () => { cancelConfirmations(); terminals?.stopAll(); };
+  win.on('closed', release);
+  win.webContents.on('did-start-loading', release);
+  win.webContents.on('render-process-gone', release);
   const confirm = (title: string, detail: string): Promise<boolean> => new Promise(resolve => {
     if (!win || win.isDestroyed() || pendingConfirmations.size >= 10) { resolve(false); return; }
     const id = randomUUID(); pendingConfirmations.set(id, resolve);
@@ -84,8 +97,9 @@ async function main() {
   handle('deleteSession', async id => {
     idSchema.parse(id); const entry = store.session(id);
     if (runs!.isBusy(id) || pendingRuns.has(id)) throw Error('请先停止该会话的运行任务，再删除会话');
-    if (!await confirm('删除会话', `确定删除“${entry.title}”？此操作无法撤销。\n仅删除对话记录，项目文件及修改/回滚记录会保留。`)) return false;
+    if (!await confirm('删除会话', `确定删除“${entry.title}”？此操作无法撤销。\n仅删除对话记录，项目文件及修改/回滚记录会保留。${terminals?.has(id) ? '\n正在运行的终端会被终止。' : ''}`)) return false;
     if (runs!.isBusy(id) || pendingRuns.has(id)) throw Error('该会话正在运行，不能删除');
+    terminals?.stop(id);
     store.state.sessions = store.state.sessions.filter(s => s.id !== id);
     for (const change of store.state.changes) if (change.sessionId === id) delete change.sessionId;
     store.save(); return true;
@@ -109,6 +123,31 @@ async function main() {
   });
   handle('tree', (id, relative) => listFiles(store.project(idSchema.parse(id)).root, relativeSchema.parse(relative)));
   handle('readFile', (id, relative) => readSnapshot(store.project(idSchema.parse(id)).root, relativeSchema.parse(relative)));
+  handle('gitStatus', id => gitStatus(store.project(idSchema.parse(id)).root));
+  handle('gitCheckout', async (id, branch) => {
+    const project = store.project(idSchema.parse(id)); const name = z.string().trim().min(1).max(200).parse(branch);
+    if (store.state.sessions.some(s => s.projectId === project.id && (runs!.isBusy(s.id) || pendingRuns.has(s.id)))) throw Error('请先停止此项目的运行任务，再切换分支');
+    const status = await gitStatus(project.root);
+    if (status.branch === name) return status;
+    if (!await confirm('切换 Git 分支', `${project.root}\n\ngit checkout ${name}\n\n会改动工作区文件；未提交的改动可能保留或导致切换失败。不访问远端，也不丢弃任何提交。`)) return null;
+    await gitCheckout(project.root, name);
+    return gitStatus(project.root);
+  });
+  handle('terminalStart', sessionId => terminals!.start(idSchema.parse(sessionId)));
+  handle('terminalWrite', (sessionId, data) => terminals!.write(idSchema.parse(sessionId), z.string().max(8192).parse(data)));
+  handle('terminalResize', (sessionId, cols, rows) => terminals!.resize(idSchema.parse(sessionId), z.number().int().min(2).max(1000).parse(cols), z.number().int().min(2).max(1000).parse(rows)));
+  handle('terminalStop', sessionId => terminals!.stop(idSchema.parse(sessionId)));
+  // Same CLI, but in a real console window: the OS terminal owns the IME and the rendering.
+  handle('openExternalTerminal', sessionId => {
+    const session = store.session(idSchema.parse(sessionId));
+    const project = store.project(session.projectId); const config = sessionConfig(store, session.id);
+    const adapter = adapterFor(config.kind);
+    if (!adapter.interactive) return { ok: false, message: '该连接不是本机 CLI，没有可交互的终端。' };
+    const preset = adapter.interactive(config);
+    const line = consoleLine([preset.command, ...preset.args]);
+    spawn('cmd.exe', ['/c', 'start', '', 'cmd.exe', '/k', line], { cwd: project.root, detached: true, windowsHide: false, stdio: 'ignore' }).unref();
+    return { ok: true, message: '' };
+  });
   handle('createSession', (projectId, providerId, model) => {
     store.project(idSchema.parse(projectId)); store.provider(idSchema.parse(providerId));
     const selectedModel = z.string().trim().max(150).optional().parse(model) ?? store.provider(providerId).model;
@@ -118,7 +157,7 @@ async function main() {
   handle('providerModels', async (id, discover) => {
     const config = store.provider(idSchema.parse(id)); const adapter = adapterFor(config.kind);
     if (z.boolean().optional().parse(discover) && adapter.listModels) {
-      if (!await confirm('读取 CLI 模型列表', `将运行 ${config.executable || 'cmdc'} --list-models。此命令可能联网更新模型目录，不发送对话。`)) throw Error('已取消读取');
+      if (!await confirm('读取 CLI 模型列表', `将运行 ${config.executable || defaultExecutable(config.kind)} 的模型列表命令。此命令可能联网读取模型目录，不发送对话。`)) throw Error('已取消读取');
       const models = await adapter.listModels(config);
       return { models: [...new Set([...configuredModels(config), ...models])], note: '来自本机 CLI 模型目录；实际可用性由登录账号决定' };
     }
@@ -139,21 +178,25 @@ async function main() {
   });
   handle('probeProvider', async id => {
     const config = store.provider(idSchema.parse(id));
-    if (config.kind.endsWith('-cli') && !await confirm('检测本地 CLI', `将运行 ${config.executable || (config.kind === 'command-cli' ? 'cmdc' : config.kind.replace('-cli', ''))} --version。此程序以当前用户权限执行，请确认来源可信。`)) return '已取消';
+    if (config.kind.endsWith('-cli') && !await confirm('检测本地 CLI', `将运行 ${config.executable || defaultExecutable(config.kind)} --version。此程序以当前用户权限执行，请确认来源可信。`)) return '已取消';
     return adapterFor(config.kind).probe(config);
   });
   handle('run', async input => {
-    const request = z.object({ sessionId: idSchema, prompt: z.string().trim().min(1).max(60000), context: z.array(relativeSchema).max(30) }).parse(input);
-    const s = store.session(request.sessionId); const p = sessionConfig(store, s.id); const project = store.project(s.projectId);
+    const request = z.object({ sessionId: idSchema, prompt: z.string().trim().min(1).max(60000), context: z.array(relativeSchema).max(30), retry: z.boolean().optional() }).parse(input);
+    const s = store.session(request.sessionId);
     if (pendingRuns.has(s.id) || runs!.isBusy(s.id)) throw Error('此会话正在运行或等待确认');
     pendingRuns.add(s.id);
-    try {
-    const detail = p.kind.endsWith('-api')
-      ? `目标：${apiEndpoint(p)}\n模型：${p.model}\n将发送最近的对话及 ${request.context.length} 个已选文件，可能产生费用。请确认目标服务可信。`
-      : `程序：${p.executable || (p.kind === 'command-cli' ? 'cmdc' : p.kind.replace('-cli', ''))}\n项目：${project.root}\n模型：${p.model || 'CLI 默认'}\n复用该 CLI 的本地登录态。本应用不启动登录流程。将请求 CLI 的只读/规划模式；CLI 插件、配置和系统权限仍由 CLI 自身控制，这不是操作系统沙箱。仅运行可信项目与 CLI。`;
-    if (!await confirm('运行模型并发送上下文', detail)) throw Error('已取消运行');
-    return runs!.start(request);
-    } finally { pendingRuns.delete(s.id); }
+    try { return runs!.start(request); } finally { pendingRuns.delete(s.id); }
+  });
+  // A headless CLI cannot ask for permission; the user grants it from the conversation instead.
+  handle('grantAuthorization', (sessionId, grant) => {
+    const session = store.session(idSchema.parse(sessionId)); const parsed = grantSchema.parse(grant);
+    const entry = 'directory' in parsed ? { directory: statSync(parsed.directory).isDirectory() ? parsed.directory : path.dirname(parsed.directory) } : parsed;
+    if (!(session.grants ?? []).some(existing => sameGrant(entry, existing))) session.grants = [...(session.grants ?? []), entry];
+    store.save(); return session;
+  });
+  handle('clearGrants', sessionId => {
+    const session = store.session(idSchema.parse(sessionId)); delete session.grants; store.save(); return session;
   });
   handle('stop', id => runs!.stop(idSchema.parse(id)));
   handle('command', async (sessionId, input) => {

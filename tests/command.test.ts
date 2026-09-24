@@ -19,7 +19,7 @@ async function temporary(t: any) {
 }
 test('Command CLI decodes split AgentEvent frames without replaying final text', () => {
   let output = ''; const status: string[] = [];
-  const parser = createCommandParser(e => e.type === 'text' ? output += e.text : status.push(e.text));
+  const parser = createCommandParser(e => { if (e.type === 'text') output += e.text; else if (e.type === 'status') status.push(e.text); });
   const wire = event({ type: 'turn_start', turnNumber: 1 }) + event({ type: 'text_delta', delta: '你好' }) + event({ type: 'text_delta', delta: '世界' }) + event({ type: 'tool_running', toolName: 'read_file' }) + event({ type: 'run_end', result: { finalText: '你好世界' } }) + result('你好世界');
   for (let i = 0; i < wire.length; i += 7) parser.push(wire.slice(i, i + 7));
   parser.end(); assert.equal(output, '你好世界'); assert.match(status.join(''), /read_file/);
@@ -65,10 +65,59 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', finalText: inpu
   assert.match(await adapterFor('command-cli').probe({ ...config, executable }), /fixture 1.0/);
   assert.ok(!commandArgs().includes('--model'));
 });
+test('Command CLI maps session grants to CLI flags', () => {
+  const plan = commandArgs('m');
+  assert.equal(plan[plan.indexOf('--permission-mode') + 1], 'plan');
+  assert.ok(!plan.includes('--yolo') && !plan.includes('--add-dir'));
+  const scoped = commandArgs('m', [{ directory: 'C:\\shared' }]);
+  assert.equal(scoped[scoped.indexOf('--add-dir') + 1], 'C:\\shared');
+  assert.equal(scoped[scoped.indexOf('--permission-mode') + 1], 'plan');
+  // plan mode would still block writes, so an unlimited grant drops it in favour of --yolo.
+  const open = commandArgs('m', [{ all: true }]);
+  assert.ok(open.includes('--yolo'));
+  assert.ok(!open.includes('--permission-mode'));
+  // Only the adapter that maps grants may raise an authorization request; the others keep denials as status text.
+  assert.equal(adapterFor('command-cli').supportsGrants, true);
+  assert.equal(adapterFor('claude-cli').supportsGrants, undefined);
+});
+test('Command CLI reports denied headless tools instead of a bare exit code', async t => {
+  const status: string[] = [];
+  const tools: import('../packages/providers/types').ProviderEvent[] = [];
+  const parser = createCommandParser(e => { tools.push(e); if (e.type === 'status') status.push(e.text); });
+  parser.push(event({ type: 'tool_queued', toolName: 'read_file', input: { file_path: '/outside/project.txt' } }) + event({ type: 'tool_denied', toolName: 'read_file' }) + result(''));
+  parser.end();
+  assert.match(status.join(''), /工具被拒绝：read_file/);
+  // The queued frame reveals which file the model wanted, without echoing file bodies.
+  assert.match(status.join(''), /调用工具：read_file \/outside\/project\.txt/);
+  assert.deepEqual(tools.filter(entry => entry.type === 'tool'), [
+    { type: 'tool', state: 'queued', name: 'read_file', detail: '/outside/project.txt' },
+    { type: 'tool', state: 'denied', name: 'read_file', detail: '' },
+  ]);
+
+  const silent: string[] = [];
+  const quiet = createCommandParser(e => { if (e.type === 'status') silent.push(e.text); });
+  quiet.push(event({ type: 'tool_queued', toolName: 'write_file', input: { file_path: 'a.ts', content: 'SECRET BODY' } }) + result(''));
+  quiet.end();
+  assert.match(silent.join(''), /调用工具：write_file a\.ts/);
+  assert.ok(!silent.join('').includes('SECRET BODY'));
+
+  const cwd = await temporary(t); const executable = path.join(cwd, 'denied fixture.mjs');
+  await writeFile(executable, `console.log(JSON.stringify({ type: 'event', event: { type: 'tool_queued', toolName: 'read_file', input: { file_path: '/outside/project.txt' } } }));
+console.log(JSON.stringify({ type: 'event', event: { type: 'tool_denied', toolName: 'read_file' } }));
+console.error('The model produced no response (continuation budget exhausted).');
+process.exitCode = 9;
+`);
+  const emitted: string[] = [];
+  await assert.rejects(
+    adapterFor('command-cli').run({ config: { ...config, executable }, cwd, prompt: 'x', signal: AbortSignal.timeout(5000) }, e => { if (e.type !== 'tool') emitted.push(e.text); }),
+    /进程退出码 9[\s\S]*continuation budget[\s\S]*被拒绝 1 次/,
+  );
+  assert.match(emitted.join(''), /调用工具：read_file \/outside\/project\.txt/);
+});
 test('Command default migration preserves existing connections and runs once', async t => {
   const dir = await temporary(t); const store = new Store(dir);
   store.state.providers.push({ ...config, kind: 'codex-cli', name: 'User provider' }); store.save();
-  ensureDefaultProviders(store); assert.equal(store.state.providers.length, 2);
+  ensureDefaultProviders(store); assert.equal(store.state.providers.length, 3);
   assert.equal(store.state.providers[0].name, 'User provider');
   const id = store.state.providers.find(p => p.kind === 'command-cli')!.id;
   const reopened = new Store(dir); ensureDefaultProviders(reopened);
@@ -80,9 +129,11 @@ test('Command default migration preserves existing connections and runs once', a
 test('Command default migration does not duplicate a user configured cmdc', async t => {
   const dir = await temporary(t); const store = new Store(dir);
   store.state.providers.push({ ...config, executable: 'custom.mjs' }); ensureDefaultProviders(store);
-  assert.equal(store.state.providers.length, 1); assert.equal(store.state.providers[0].executable, 'custom.mjs');
+  assert.equal(store.state.providers.filter(p => p.kind === 'command-cli').length, 1);
+  assert.equal(store.state.providers[0].executable, 'custom.mjs');
+  assert.equal(store.state.providers.length, 2);
   const fresh = new Store(path.join(dir, 'new')); ensureDefaultProviders(fresh);
-  assert.equal(fresh.state.providers.length, 4);
+  assert.equal(fresh.state.providers.length, 5);
 });
 
 test('model catalog parser accepts CLI rows and excludes headings/instructions', async () => {
