@@ -52,18 +52,22 @@ try {
   // No Enter, terminal click, or AI request is needed for any of these paths.
   const focused = () => page.locator('.xterm-helper-textarea').evaluate(el => document.activeElement === el);
   await row.locator('.session-open').click();
-  assert.ok(await focused(), 'reopening the same session left focus on sidebar button');
+  await page.waitForFunction(() => document.activeElement === document.querySelector('.xterm-helper-textarea'), undefined, { timeout: 2500 });
   await page.keyboard.type('SIDEBARKEY');
   await page.waitForFunction(() => window.seen.join('').includes('SIDEBARKEY'), undefined, { timeout: 6000 });
   await page.locator('.terminal-view .session-tab.active .tab-open').click();
-  assert.ok(await focused(), 'reopening the same tab left focus on tab button');
+  await page.waitForFunction(() => document.activeElement === document.querySelector('.xterm-helper-textarea'), undefined, { timeout: 2500 });
   await page.keyboard.type('TABKEY');
   await page.waitForFunction(() => window.seen.join('').includes('TABKEY'), undefined, { timeout: 6000 });
   await page.locator('nav.rail button[aria-label="模型与 API Key"]').click();
   await page.locator('nav.rail button[aria-label="终端"]').click();
-  assert.ok(await focused(), 'returning from model menu left focus on menu button');
+  await page.waitForFunction(() => document.activeElement === document.querySelector('.xterm-helper-textarea'), undefined, { timeout: 2500 });
   await page.keyboard.type('MENUKEY');
   await page.waitForFunction(() => window.seen.join('').includes('MENUKEY'), undefined, { timeout: 6000 });
+  await page.locator('.terminal-view .session-tab.active .tab-open').focus();
+  await page.keyboard.press('x');
+  await page.waitForFunction(() => window.seen.join('').includes('MENUKEYx'), undefined, { timeout: 6000 });
+  assert.ok(await focused(), 'fallback first key should return focus to xterm');
   assert.deepEqual(errors, []);
-  console.log('Real cmdc smoke passed: first input, sidebar/tab reselect, menu return, IME anchor and long composition, all without initial Enter.');
+  console.log('Real cmdc smoke passed: first input, session/menu return, stray tab focus, IME anchor and long composition without initial Enter.');
 } finally { await app.close(); }

@@ -23,14 +23,31 @@ type Props = {
 export function TerminalView({ theme, session, label, sessions, closedTabs, providers, providerId, model, disabled, active, focusRequest, onSelectSession, onCloseTab, onNewSession, onSelect, onCreate, error }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const instance = useRef<Terminal | undefined>(undefined);
-  const focusPending = useRef(false);
   const [notice, setNotice] = useState('');
   const [serial, setSerial] = useState(0);
   const [booted, setBooted] = useState(false);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const initialMetrics = () => ({ keys: 0, enter: 0, imeKeys: 0, otherKeys: 0, compositionStart: 0, compositionEnd: 0, beforeInput: 0, input: 0, data: 0, writes: 0, output: 0, focus: '无', lastEvent: '无' });
+  const [diagnostics, setDiagnostics] = useState(initialMetrics);
+  const diagnosingRef = useRef(false);
+  diagnosingRef.current = diagnosing;
+  const metrics = useRef(diagnostics);
+  const describeFocus = () => {
+    const focused = document.activeElement;
+    if (focused?.classList.contains('xterm-helper-textarea')) return '终端输入框';
+    if (focused instanceof HTMLElement) return focused.getAttribute('aria-label') || focused.tagName.toLowerCase();
+    return '无';
+  };
+  const count = (field: 'keys' | 'enter' | 'imeKeys' | 'otherKeys' | 'compositionStart' | 'compositionEnd' | 'beforeInput' | 'input' | 'data' | 'writes' | 'output', event?: string) => {
+    if (!diagnosingRef.current) return;
+    metrics.current[field]++;
+    metrics.current.focus = describeFocus();
+    if (event) metrics.current.lastEvent = event;
+    setDiagnostics({ ...metrics.current });
+  };
   const sessionId = session?.id ?? '';
   const activeRef = useRef(active);
   activeRef.current = active;
-  const isCommandCli = providers.some(p => p.id === session?.providerId && p.kind === 'command-cli');
   useEffect(() => {
     if (!sessionId || !host.current) return;
     // The theme is read once here; a separate effect restyles the live terminal on theme change.
@@ -38,61 +55,30 @@ export function TerminalView({ theme, session, label, sessions, closedTabs, prov
     const fit = new FitAddon(); view.loadAddon(fit); view.open(host.current);
     instance.current = view;
     try { fit.fit(); } catch { /* the host may not be laid out yet */ }
-    // cmdc drops input until its Ink prompt is installed; enable the textarea when it is ready.
-    if (view.textarea && isCommandCli) view.textarea.disabled = true;
-    if (active && !isCommandCli) view.focus();
+    if (active) view.focus();
     let alive = true;
     // A tab/button click can reclaim focus after React mounts the terminal.
     // Correct that once on the next frame; never refocus while an IME is active.
     const focusFrame = requestAnimationFrame(() => {
-      if (alive && activeRef.current && !isCommandCli && view.textarea && document.activeElement !== view.textarea &&
-          !view.textarea.matches(':focus') && !document.activeElement?.matches('input, textarea, [contenteditable=true]')) view.focus();
+      if (alive && activeRef.current && view.textarea && document.activeElement !== view.textarea &&
+          !document.activeElement?.matches('input, textarea, [contenteditable=true]')) view.focus();
     });
-    let ready = false;
-    let recent = '';
-    let promptReadyScheduled = false;
-    let idle: ReturnType<typeof setTimeout> | undefined;
-    let fallback: ReturnType<typeof setTimeout> | undefined;
     const sendToPty = (data: string) => {
       // Focus reporting is terminal protocol traffic, never typed content.
       // Passing it to an Ink CLI can corrupt its first input event.
       if (data === '\x1b[I' || data === '\x1b[O') return;
-      if (!ready) return;
-      void bridge.terminalWrite(sessionId, data).catch(failure => { if (alive) error(failure); });
-    };
-    const markReady = () => {
-      if (ready || !alive) return;
-      ready = true;
-      clearTimeout(idle);
-      clearTimeout(fallback);
-      if (view.textarea) view.textarea.disabled = false;
-      setBooted(true);
-      // A disabled textarea cannot take focus. Finish navigation when the CLI is ready,
-      // including when a hidden page's input retained focus during the switch.
-      const focused = document.activeElement as HTMLElement | null;
-      const editingElsewhere = focused && focused !== view.textarea &&
-        focused.matches('input, textarea, [contenteditable=true]') && focused.getClientRects().length > 0;
-      // A visible editor means the user has moved focus deliberately while the CLI booted.
-      // Honor that choice; otherwise complete the pending terminal focus request.
-      if (activeRef.current && !editingElsewhere &&
-          (focusPending.current || !focused?.matches('input, textarea, [contenteditable=true]') || !focused.getClientRects().length)) {
-        view.focus();
-      }
-      focusPending.current = false;
+      count('data');
+      void bridge.terminalWrite(sessionId, data).then(() => { if (alive) count('writes'); }).catch(failure => { if (alive) error(failure); });
     };
     let refreshIme = () => {};
     const stopEvents = bridge.onTerminal(event => {
       if (event.sessionId !== sessionId) return;
       if (event.type === 'data') {
-        recent = (recent + event.data).slice(-10000);
-        // cmdc installs its key handler when it draws this prompt.
-        if (isCommandCli && !promptReadyScheduled && /Ask your question/i.test(recent)) {
-          clearTimeout(idle); promptReadyScheduled = true; idle = setTimeout(markReady, 120);
-        } else if (!isCommandCli && !ready) {
-          markReady();
-        }
+        count('output');
         view.write(event.data, refreshIme);
-      } else { clearTimeout(idle); markReady(); view.write(`\r\n[LP Studio] 终端已退出，退出码 ${event.exitCode}。\r\n`); }
+      } else {
+        view.write(`\r\n[LP Studio] 终端已退出，退出码 ${event.exitCode}。\r\n`);
+      }
     });
     const input = view.onData(sendToPty);
     const ime = attachTerminalIme(view, host.current);
@@ -105,37 +91,75 @@ export function TerminalView({ theme, session, label, sessions, closedTabs, prov
     void bridge.terminalStart(sessionId).then(result => {
       if (!alive) return;
       setNotice(result.ok ? '' : result.message);
-      if (result.ok) {
-        // Don't lock out login/onboarding or a changed cmdc prompt indefinitely.
-        // Readiness recognition is only an input gate; it never buffers input.
-        if (!ready) fallback = setTimeout(markReady, isCommandCli ? 8000 : 1200);
-        void bridge.terminalResize(sessionId, view.cols, view.rows).catch(() => {});
-        // Keep the existing textarea focus: refocusing while IME composes loses keys.
-      }
-    }).catch(failure => { if (alive) error(failure); });
+      // This describes only the PTY start result. Input forwarding never waits for a prompt.
+      setBooted(true);
+      if (result.ok) void bridge.terminalResize(sessionId, view.cols, view.rows).catch(() => {});
+    }).catch(failure => { if (alive) { setBooted(true); setNotice(failure instanceof Error ? failure.message : String(failure)); } });
     return () => {
-      alive = false; focusPending.current = false; cancelAnimationFrame(focusFrame); clearTimeout(idle); clearTimeout(fallback); observer.disconnect(); stopEvents(); input.dispose(); ime.dispose(); view.dispose();
+      alive = false; cancelAnimationFrame(focusFrame); observer.disconnect(); stopEvents(); input.dispose(); ime.dispose(); view.dispose();
       instance.current = undefined;
       void bridge.terminalStop(sessionId).catch(() => {});
     };
-  }, [sessionId, serial, isCommandCli]);
+  }, [sessionId, serial]);
   useEffect(() => { if (instance.current) instance.current.options.theme = terminalThemes[theme]; }, [theme]);
   // Reselecting an existing session leaves focus on the clicked sidebar or tab
   // button. Give the terminal focus after that click, even if its id is unchanged.
   useEffect(() => {
-    if (!active || !sessionId) { focusPending.current = false; return; }
-    focusPending.current = true;
+    if (!active || !sessionId) return;
     const frame = requestAnimationFrame(() => {
       const view = instance.current;
-      if (!view?.textarea || view.textarea.disabled) return;
+      if (!view?.textarea) return;
       const focused = document.activeElement as HTMLElement | null;
       if (focused && focused !== view.textarea &&
           focused.matches('input, textarea, [contenteditable=true]') && focused.getClientRects().length) return;
       view.focus();
-      focusPending.current = document.activeElement !== view.textarea;
     });
     return () => cancelAnimationFrame(frame);
   }, [active, sessionId, focusRequest]);
+  // The first printable key can arrive while a nav or tab button still owns focus.
+  // The keydown's target is already fixed at that point: focusing xterm alone would
+  // lose the first character. Send it once through xterm's normal onData pipeline.
+  useEffect(() => {
+    if (!active || !sessionId) return;
+    const firstKey = (event: KeyboardEvent) => {
+      if (event.key === 'Enter') count('enter', `回车${event.isComposing ? '（组合中）' : ''}`);
+      else if (event.isComposing || event.keyCode === 229 || event.key === 'Process') count('imeKeys', `输入法按键（键码 ${event.keyCode}）`);
+      else if (event.key.length === 1) count('keys', '字符按键');
+      else count('otherKeys', `其他键（键码 ${event.keyCode}）`);
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.key.length !== 1) return;
+      const view = instance.current;
+      if (!view?.textarea || document.activeElement === view.textarea) return;
+      const focused = document.activeElement as HTMLElement | null;
+      if (focused?.matches('input, textarea, select, [contenteditable=true]')) return;
+      if (focused && focused !== document.body && !focused.closest('.rail, .tabs, .session-list, .terminal-host')) return;
+      event.preventDefault();
+      view.focus();
+      view.input(event.key);
+    };
+    const area = instance.current?.textarea;
+    const onCompositionStart = () => count('compositionStart', '开始组合输入');
+    const onCompositionEnd = () => count('compositionEnd', '完成组合输入');
+    const onBeforeInput = (event: Event) => count('beforeInput', `输入事件：${(event as InputEvent).inputType}`);
+    const onInput = (event: Event) => count('input', `已输入：${(event as InputEvent).inputType}`);
+    const onFocus = () => { if (diagnosingRef.current) { metrics.current.focus = describeFocus(); metrics.current.lastEvent = '终端焦点变化'; setDiagnostics({ ...metrics.current }); } };
+    const onBlur = () => { if (diagnosingRef.current) { metrics.current.focus = describeFocus(); metrics.current.lastEvent = '终端焦点变化'; setDiagnostics({ ...metrics.current }); } };
+    window.addEventListener('keydown', firstKey, true);
+    area?.addEventListener('compositionstart', onCompositionStart, true);
+    area?.addEventListener('compositionend', onCompositionEnd, true);
+    area?.addEventListener('beforeinput', onBeforeInput, true);
+    area?.addEventListener('input', onInput, true);
+    area?.addEventListener('focus', onFocus);
+    area?.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', firstKey, true);
+      area?.removeEventListener('compositionstart', onCompositionStart, true);
+      area?.removeEventListener('compositionend', onCompositionEnd, true);
+      area?.removeEventListener('beforeinput', onBeforeInput, true);
+      area?.removeEventListener('input', onInput, true);
+      area?.removeEventListener('focus', onFocus);
+      area?.removeEventListener('blur', onBlur);
+    };
+  }, [active, sessionId]);
   // A confirm dialog closing leaves focus on <body>, which makes the terminal look dead: keys go nowhere
   // and no amount of typing helps. Reclaim focus whenever nothing else legitimately holds it.
   useEffect(() => {
@@ -144,8 +168,7 @@ export function TerminalView({ theme, session, label, sessions, closedTabs, prov
       const focused = document.activeElement;
       if (focused && focused !== document.body) return;
       const view = instance.current;
-      if (view?.textarea?.disabled) focusPending.current = true;
-      else view?.focus();
+      view?.focus();
     };
     const afterPointer = () => { setTimeout(reclaim, 0); };
     window.addEventListener('focus', reclaim);
@@ -167,13 +190,23 @@ export function TerminalView({ theme, session, label, sessions, closedTabs, prov
       <div className="terminal-toolbar">
         <span className="terminal-label"><TerminalIcon size={14}/>{label}</span>
         <div className="row">
+          <button className="text-button" title="仅统计事件数量和焦点，不记录输入内容" onClick={() => {
+            metrics.current = initialMetrics();
+            metrics.current.focus = describeFocus();
+            setDiagnostics({ ...metrics.current }); setDiagnosing(value => !value);
+            instance.current?.focus();
+          }}>输入诊断{diagnosing ? '：开' : ''}</button>
           <button className="text-button" title="在系统终端（cmd）中打开同一个 CLI，使用系统的输入法" onClick={() => void bridge.openExternalTerminal(sessionId).then(result => { if (!result.ok) setNotice(result.message); }).catch(error)}><ExternalLink size={13}/>系统终端</button>
           <button className="text-button" title="用当前模型重新启动终端" onClick={() => void restart()}><RotateCcw size={13}/>重启</button>
           <button className="text-button" title="终止终端进程" onClick={() => void stop()}><Power size={13}/>停止</button>
         </div>
       </div>
+      {diagnosing && <div className="terminal-boot" role="status">
+        <div>输入诊断：字符按键 {diagnostics.keys} · 输入法按键 {diagnostics.imeKeys} · 回车 {diagnostics.enter} · 组合开始/结束 {diagnostics.compositionStart}/{diagnostics.compositionEnd} · beforeinput/input {diagnostics.beforeInput}/{diagnostics.input}</div>
+        <div>xterm 发送 {diagnostics.data} · PTY 写入请求 {diagnostics.writes} · CLI 输出 {diagnostics.output} · 焦点 {diagnostics.focus} · 最后事件 {diagnostics.lastEvent}（不记录输入内容）</div>
+      </div>}
       {notice && <div className="terminal-notice">{notice}</div>}
-      {!booted && !notice && <div className="terminal-boot">CLI 正在启动，请等待输入提示符出现</div>}
+      {!booted && !notice && <div className="terminal-boot">正在连接终端…</div>}
       <div className="terminal-host" ref={host}/>
     </> : <div className="terminal-empty">
       <div className="terminal-empty-icon"><TerminalIcon size={30}/></div>

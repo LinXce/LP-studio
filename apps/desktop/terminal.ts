@@ -53,6 +53,10 @@ export class TerminalService {
     if (this.generations.get(sessionId) !== undefined && this.generations.get(sessionId) !== generation) return { ok: false, message: '\u7ec8\u7aef\u542f\u52a8\u5df2\u53d6\u6d88' };
     const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
     delete env.NODE_OPTIONS;
+    // Command CLI's terminal capability probes leave stdin unable to consume the first
+    // character under Windows ConPTY. TERM=dumb skips those probes while preserving
+    // the real PTY, its interactive prompts, and the app's xterm display.
+    if (process.platform === 'win32' && config.kind === 'command-cli') env.TERM = 'dumb';
     const child = pty.spawn(executable, [...launch.args, ...preset.args], { cwd: project.root, env, cols: 120, rows: 30, name: 'xterm-256color' });
     console.log(`[term] spawn ${executable} ${[...launch.args, ...preset.args].join(' ')} cwd=${project.root}`);
     this.sessions.set(sessionId, child);

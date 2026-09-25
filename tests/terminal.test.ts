@@ -18,10 +18,10 @@ function fakePty() {
   const written: string[] = []; const sizes: Array<[number, number]> = []; let killed = false;
   let data: ((chunk: string) => void) | undefined; let exit: ((event: { exitCode: number }) => void) | undefined;
   const exits: Array<(event: { exitCode: number }) => void> = [];
-  const spawns: { file: string; args: string[]; cwd: string }[] = [];
+  const spawns: { file: string; args: string[]; cwd: string; term: string | undefined }[] = [];
   const module: PtyModule = {
     spawn(file, args, options) {
-      spawns.push({ file, args, cwd: options.cwd });
+      spawns.push({ file, args, cwd: options.cwd, term: options.env.TERM });
       return {
         onData: callback => { data = callback; },
         onExit: callback => { exit = callback; exits.push(callback); },
@@ -80,6 +80,7 @@ test('terminal spawns the CLI in the project and forwards bytes both ways', asyn
   assert.deepEqual(await terminal.start('s'), { ok: true, message: '' });
   assert.equal(pty.spawns.length, 1);
   assert.equal(pty.spawns[0].cwd, dir);
+  if (process.platform === 'win32') assert.equal(pty.spawns[0].term, 'dumb');
   // The head of the argv is the resolved runtime/script, which depends on how the CLI is installed.
   assert.deepEqual(pty.spawns[0].args.slice(-5), ['--model', 'test-model', '--trust', '--skip-onboarding', '--no-auto-update']);
   assert.equal(terminal.has('s'), true);
